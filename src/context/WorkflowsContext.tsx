@@ -3,27 +3,25 @@ import {
   useContext,
   useReducer,
   useMemo,
+  useEffect,
+  useCallback,
   type ReactNode,
 } from 'react';
 import type {
   Workflow,
   WorkflowsState,
   WorkflowsAction,
-  SortConfig,
 } from '../types/workflow.types';
-
-const initialSortConfig: SortConfig = {
-  field: 'lastUpdated',
-  direction: 'desc',
-};
+import { fetchWorkflows } from '../services/airops.service';
 
 const initialState: WorkflowsState = {
   workflows: [],
   searchTerm: '',
-  sortConfig: initialSortConfig,
   isLoading: false,
   error: null,
 };
+
+const DEFAULT_COUNT = 100;
 
 function workflowsReducer(
   state: WorkflowsState,
@@ -38,20 +36,6 @@ function workflowsReducer(
         error: null,
       };
 
-    case 'ADD_WORKFLOW':
-      return {
-        ...state,
-        workflows: [action.payload, ...state.workflows],
-      };
-
-    case 'UPDATE_WORKFLOW':
-      return {
-        ...state,
-        workflows: state.workflows.map((workflow) =>
-          workflow.id === action.payload.id ? action.payload : workflow
-        ),
-      };
-
     case 'DELETE_WORKFLOW':
       return {
         ...state,
@@ -64,12 +48,6 @@ function workflowsReducer(
       return {
         ...state,
         searchTerm: action.payload,
-      };
-
-    case 'SET_SORT_CONFIG':
-      return {
-        ...state,
-        sortConfig: action.payload,
       };
 
     case 'SET_LOADING':
@@ -90,41 +68,29 @@ function workflowsReducer(
   }
 }
 
+interface LoadWorkflowsOptions {
+  count?: number;
+}
+
 interface WorkflowsContextValue {
   state: WorkflowsState;
-  dispatch: React.Dispatch<WorkflowsAction>;
   filteredWorkflows: Workflow[];
+  loadWorkflows: (options?: LoadWorkflowsOptions) => Promise<void>;
+  setSearchTerm: (term: string) => void;
+  deleteWorkflow: (id: number) => void;
 }
 
 const WorkflowsContext = createContext<WorkflowsContextValue | null>(null);
 
 function filterWorkflows(workflows: Workflow[], searchTerm: string): Workflow[] {
+
   if (!searchTerm.trim()) {
     return workflows;
   }
 
-  const normalizedSearch = searchTerm.toLowerCase().trim();
   return workflows.filter((workflow) =>
-    workflow.name.toLowerCase().includes(normalizedSearch)
+    workflow.name.toLowerCase().includes(searchTerm.toLowerCase().trim())
   );
-}
-
-function sortWorkflows(workflows: Workflow[], sortConfig: SortConfig): Workflow[] {
-  const { field, direction } = sortConfig;
-
-  return [...workflows].sort((a, b) => {
-    let comparison = 0;
-
-    if (field === 'name') {
-      comparison = a.name.localeCompare(b.name);
-    } else if (field === 'type') {
-      comparison = a.type.localeCompare(b.type);
-    } else if (field === 'lastUpdated') {
-      comparison = a.lastUpdated - b.lastUpdated;
-    }
-
-    return direction === 'asc' ? comparison : -comparison;
-  });
 }
 
 interface WorkflowsProviderProps {
@@ -134,18 +100,42 @@ interface WorkflowsProviderProps {
 export function WorkflowsProvider({ children }: WorkflowsProviderProps) {
   const [state, dispatch] = useReducer(workflowsReducer, initialState);
 
+  const loadWorkflows = useCallback(async (options?: LoadWorkflowsOptions) => {
+    dispatch({ type: 'SET_LOADING', payload: true });
+    try {
+      const workflows = await fetchWorkflows(options);
+      dispatch({ type: 'SET_WORKFLOWS', payload: workflows });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to fetch workflows';
+      dispatch({ type: 'SET_ERROR', payload: message });
+    }
+  }, []);
+
+  const setSearchTerm = useCallback((term: string) => {
+    dispatch({ type: 'SET_SEARCH_TERM', payload: term });
+  }, []);
+
+  const deleteWorkflow = useCallback((id: number) => {
+    dispatch({ type: 'DELETE_WORKFLOW', payload: id });
+  }, []);
+
+  useEffect(() => {
+    loadWorkflows({ count: DEFAULT_COUNT });
+  }, [loadWorkflows]);
+
   const filteredWorkflows = useMemo(() => {
-    const filtered = filterWorkflows(state.workflows, state.searchTerm);
-    return sortWorkflows(filtered, state.sortConfig);
-  }, [state.workflows, state.searchTerm, state.sortConfig]);
+    return filterWorkflows(state.workflows, state.searchTerm);
+  }, [state.workflows, state.searchTerm]);
 
   const contextValue = useMemo<WorkflowsContextValue>(
     () => ({
       state,
-      dispatch,
       filteredWorkflows,
+      loadWorkflows,
+      setSearchTerm,
+      deleteWorkflow,
     }),
-    [state, filteredWorkflows]
+    [state, filteredWorkflows, loadWorkflows, setSearchTerm, deleteWorkflow]
   );
 
   return (
